@@ -4,16 +4,17 @@ A Python desktop app (Tkinter) that analyses an AVEVA/Wonderware **InTouch**
 application folder and reports on its **I/O tags**, **access names** and
 **mimics (windows)**, and on which tags each mimic uses.
 
-![Mimics tab](docs/screenshot_mimics.png)
+![Summary tab](docs/screenshot_summary.png)
 
 ## Features
 
 | Tab | What it shows |
 |-----|---------------|
-| **Summary** | Counts of tags by type, I/O tags, access names, windows, unused/alarmed tags, and a **historical logging breakdown**: how many tags are stored at each rate (e.g. `Cyclic 10 s`, `Cyclic 1 min`, `On change`, `On change (deadband 0.5)`), split into I/O and Memory. Double-click a rate to list its tags. |
+| **Summary** | Engineering summary first (same rows as the Excel **Summary** sheet): number of mimics and breakdown by type (Process / Popups: On Top + Overlay / Other), number of I/O data points, Analogues vs Digital, AI / AO / DI / DO / PULSE, configured alarms, historised points, historisation models (e.g. `Model 1-Flow-Change-2.5%-5`) and PLC connections. Detailed statistics follow. |
+| **Summary (details)** | Counts of tags by type, I/O tags, access names, windows, unused/alarmed tags, and a **historical logging breakdown**: how many tags are stored at each rate (e.g. `Cyclic 10 s`, `Cyclic 1 min`, `On change`, `On change (deadband 0.5)`), split into I/O and Memory. Double-click a rate to list its tags. |
 | **Tags / IO** | Every tag with type, access name, PLC item/address, group, comment, alarm flag, history rate and the windows using it. Filter by text, type (I/O, Memory, IODisc...), access name, history rate, used/unused. Double-click a tag for full details and all references. |
 | **Access Names** | Application/topic (DAServer/OI server), advise mode, protocol, failover partner, tag count. Double-click to list that access name's tags. |
-| **Mimics / Windows** | Every window with tag and I/O-tag counts and the access names (PLCs) it depends on. Select one to see its tags, their PLC addresses, windows it opens (`Show "..."`), remote references (`Access:Item`) and references to undefined tags. |
+| **Mimics / Windows** | Every window with its mimic type (and where the type came from),  tag and I/O-tag counts and the access names (PLCs) it depends on. Select one to see its tags, their PLC addresses, windows it opens (`Show "..."`), remote references (`Access:Item`) and references to undefined tags. |
 | **Window-Tag Map** | Flat window → tag cross-reference (searchable) |
 | **Issues** | I/O tags with no/undefined access name, missing item names, duplicate PLC addresses, unused access names, references to undefined tags, windows with no tags, unused tags |
 
@@ -60,6 +61,35 @@ addresses, and a few false positives). For full I/O analysis create a DBDump:
   into the application folder or select it in the GUI.
 
 Both ANSI and Unicode (UTF-16) DBDump files are supported.
+
+### Engineering summary: how things are classified
+
+InTouch doesn't store everything this summary needs, so some of it is inferred.
+The rules are editable regular expressions under **Classification rules...**
+and are saved in `%USERPROFILE%\.intouch_analyzer\settings.json`.
+
+* **Mimic type.** Taken, in order, from: a manual override (select the mimic on
+  the Mimics tab, pick a type, **Apply**; saved per application), the window
+  type in an XML export (Replace → Process, Popup → On Top, Overlay), or the
+  name rules (e.g. `faceplate`, `popup`, `fp_` → Popup; `banner`, `nav_bar`,
+  `menu` → Overlay; `template`, `_old` → Other). Anything else is Process.
+  Binary `*.win` files don't expose the window type, so for those the name
+  rules and overrides decide it.
+* **DI / DO / AI / AO / PULSE.** IODisc = digital, IOInt/IOReal = analogue,
+  IOMsg is counted separately. Direction: the PULSE rule (discrete only), then the
+  output rule (`_cmd`, `_sp`, `setpoint`, `_start`, ...), then the input rule
+  (`_pv`, `_fb`, `_sts`, `_run`, `_fault`, ...), then `ReadOnly = Yes` → input,
+  then tags assigned in a script (`Tag = ...`) → output. Anything else is an input.
+* **Configured alarms.** The number of alarm conditions (a discrete alarm, and
+  each enabled HiHi/Hi/Lo/LoLo/deviation/ROC limit), with the number of tags
+  in brackets when they differ.
+* **Historisation rate.** Historised points are grouped by measurement
+  (Flow, Level, Pressure, Speed, Temperature, Treatment, Power, matched on
+  name/comment/EngUnits/group) and history model. `Change-2.5%` is the log
+  deadband as a percentage of the EU span (MaxEU − MinEU). Each line is
+  `Model N-<measurement>-<model>-<points>`. The **History Models** sheet lists the tags in each.
+* **PLC connections.** Distinct application|topic pairs used by I/O tags.
+  Several access names pointing at the same PLC count once.
 
 ### Historical logging / storage rates
 
@@ -108,6 +138,7 @@ intouch_analyzer/
   analyzer.py   folder scan, window/script parsing, cross-referencing
   dbdump.py     DBDump CSV parser + tagname.x fallback
   history.py    historical logging mode / storage rate (DBDump + Historian export)
+  classify.py   engineering summary: mimic types, DI/DO/AI/AO, alarms, history models
   binscan.py    string extraction and tag-reference matching
   models.py     Tag / AccessName / Source / AnalysisResult + issue checks
   export.py     report tables, Excel and CSV export

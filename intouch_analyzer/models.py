@@ -103,6 +103,8 @@ class Source:
     unresolved: Set[str] = field(default_factory=set)
     remote_refs: Set[str] = field(default_factory=set)
     opens_windows: Set[str] = field(default_factory=set)
+    tag_writes: Set[str] = field(default_factory=set)  # tags assigned in scripts
+    window_type: str = ""  # Replace / Overlay / Popup when known (XML export)
 
     @property
     def is_window(self) -> bool:

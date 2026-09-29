@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import xml.etree.ElementTree as ET
 from collections import Counter
 from typing import Callable, Iterable, List, Optional, Sequence, Tuple
@@ -40,9 +41,12 @@ def _texts_of(elem: ET.Element) -> Iterable[str]:
             yield e.tail
 
 
-def _xml_windows(root: ET.Element) -> List[Tuple[str, ET.Element]]:
-    """Find window elements (outermost ones only) in an exported XML file."""
-    found: List[Tuple[str, ET.Element]] = []
+def _xml_windows(root: ET.Element) -> List[Tuple[str, ET.Element, str]]:
+    """Find window elements (outermost ones only) in an exported XML file.
+
+    Returns (name, element, window type) with the type ('Replace', 'Overlay',
+    'Popup') taken from a *Type attribute or child element when present."""
+    found: List[Tuple[str, ET.Element, str]] = []
 
     def visit(elem: ET.Element):
         local = _local(elem.tag)
@@ -54,13 +58,22 @@ def _xml_windows(root: ET.Element) -> List[Tuple[str, ET.Element]]:
                               and (c.text or "").strip()), None)
                 name = child.text.strip() if child is not None else ""
             if name:
-                found.append((name, elem))
+                found.append((name, elem, _window_type(elem, attrs)))
                 return
         for child in elem:
             visit(child)
 
     visit(root)
     return found
+
+
+def _window_type(elem: ET.Element, attrs) -> str:
+    candidates = [v for k, v in attrs.items() if "type" in k]
+    candidates += [(c.text or "") for c in elem if "type" in _local(c.tag)]
+    for v in candidates:
+        if re.search(r"(?i)replace|overlay|pop-?up", v or ""):
+            return v.strip()
+    return ""
 
 
 def _walk(app_path: str) -> List[str]:
@@ -194,10 +207,11 @@ def _apply_history(result: AnalysisResult, dbdumps: Sequence[str],
 
 
 def _make_source(matcher: RefMatcher, name: str, rel: str, kind: str, size: int,
-                 texts: Iterable[str]) -> Source:
-    refs, unresolved, remote, opens = matcher.scan(texts)
+                 texts: Iterable[str], window_type: str = "") -> Source:
+    refs, unresolved, remote, opens, writes = matcher.scan(texts)
     return Source(name=name, path=rel, kind=kind, size=size, tag_refs=Counter(refs),
-                  unresolved=unresolved, remote_refs=remote, opens_windows=opens)
+                  unresolved=unresolved, remote_refs=remote, opens_windows=opens,
+                  tag_writes=writes, window_type=window_type)
 
 
 def _scan_xml(result: AnalysisResult, matcher: RefMatcher, path: str, rel: str,
@@ -214,9 +228,9 @@ def _scan_xml(result: AnalysisResult, matcher: RefMatcher, path: str, rel: str,
             result.sources.append(src)
         return
     windows = _xml_windows(root)
-    for name, elem in windows:
+    for name, elem, wtype in windows:
         result.sources.append(_make_source(matcher, name, rel, "window-xml", size,
-                                           _texts_of(elem)))
+                                           _texts_of(elem), wtype))
     if not windows and include_other:
         src = _make_source(matcher, os.path.basename(path), rel, "script/other", size,
                            _texts_of(root))

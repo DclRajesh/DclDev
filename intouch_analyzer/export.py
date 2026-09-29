@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import csv
 import os
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
+from .classify import (EngineeringSummary, alarm_count, engineering_summary, history_model,
+                       load_overrides, load_rules, measurement_category, override_key)
 from .history import history_sort_key
 from .models import AnalysisResult
 
@@ -16,7 +18,20 @@ def _yn(flag: bool) -> str:
     return "Yes" if flag else "No"
 
 
-def summary_rows(r: AnalysisResult) -> List[Tuple[str, str]]:
+def default_engineering(r: AnalysisResult) -> EngineeringSummary:
+    return engineering_summary(r, load_rules(), load_overrides(r.app_path))
+
+
+def summary_rows(r: AnalysisResult,
+                 eng: Optional[EngineeringSummary] = None) -> List[Tuple[str, str]]:
+    """Engineering summary (mimics, DI/DO/AI/AO, alarms, history, PLCs)
+    followed by detailed statistics. Values may contain newlines."""
+    eng = eng or default_engineering(r)
+    return (eng.rows(len(r.windows), len(r.io_tags))
+            + [("", ""), ("Detailed statistics", "")] + detail_rows(r))
+
+
+def detail_rows(r: AnalysisResult) -> List[Tuple[str, str]]:
     per_access = r.tags_per_access_name()
     rows = [
         ("Application folder", r.app_path),
@@ -51,13 +66,16 @@ def history_rows(r: AnalysisResult) -> List[Tuple[str, int, str]]:
             for d in sorted(counts, key=history_sort_key)]
 
 
-def build_tables(r: AnalysisResult) -> Dict[str, Table]:
+def build_tables(r: AnalysisResult,
+                 eng: Optional[EngineeringSummary] = None) -> Dict[str, Table]:
+    eng = eng or default_engineering(r)
+    rules = load_rules()
     usage = r.tag_usage()
     win_usage = r.window_usage()
     per_access = r.tags_per_access_name()
     tables: Dict[str, Table] = {}
 
-    tables["Summary"] = (["Item", "Value"], summary_rows(r))
+    tables["Summary"] = (["Item", "Value"], summary_rows(r, eng))
 
     tag_rows = []
     for t in sorted(r.tags.values(), key=lambda t: t.key):
@@ -66,10 +84,14 @@ def build_tables(r: AnalysisResult) -> Dict[str, Table]:
         tag_rows.append((t.name, t.tag_type, t.category, t.access_name, t.item_name,
                          t.group, t.comment, _yn(t.has_alarm), t.history or "Not logged",
                          _yn(t.key in usage), len(wins), "; ".join(sorted(wins)),
-                         "; ".join(sorted(others))))
+                         "; ".join(sorted(others)), eng.io_classes.get(t.key, ""),
+                         alarm_count(t),
+                         measurement_category(t, rules) if t.is_logged else "",
+                         history_model(t) if t.is_logged else ""))
     tables["Tags"] = (["Tag", "Type", "Category", "Access Name", "Item", "Group",
                        "Comment", "Alarm", "History", "Used", "# Windows",
-                       "Windows", "Other Files"], tag_rows)
+                       "Windows", "Other Files", "I/O Class", "Alarm Conditions",
+                       "Measurement", "History Model"], tag_rows)
 
     tables["Access Names"] = (
         ["Access Name", "Application", "Topic", "Advise Active", "Protocol",
@@ -85,16 +107,28 @@ def build_tables(r: AnalysisResult) -> Dict[str, Table]:
         [(d, sum(counts[d].values())) + tuple(counts[d].get(c, 0) for c in categories)
          for d in sorted(counts, key=history_sort_key)])
 
+    model_tags: Dict[Tuple[str, str], List[str]] = {}
+    for t in r.tags.values():
+        if t.is_logged:
+            model_tags.setdefault((measurement_category(t, rules), history_model(t)),
+                                  []).append(t.name)
+    tables["History Models"] = (
+        ["Model", "Measurement", "History", "Points", "Tags"],
+        [(f"Model {i}", cat, model, n, "; ".join(sorted(model_tags.get((cat, model), []),
+                                                       key=str.lower)))
+         for i, (cat, model, n) in enumerate(eng.history_models, start=1)])
+
     win_rows = []
     for w in sorted(r.windows, key=lambda w: w.name.lower()):
         io = [k for k in w.tag_refs if k in r.tags and r.tags[k].is_io]
         accesses = sorted({r.tags[k].access_name for k in io if r.tags[k].access_name})
         win_rows.append((w.name, w.kind, w.path, len(w.tag_refs), len(io),
                          "; ".join(accesses), "; ".join(sorted(w.opens_windows)),
-                         "; ".join(sorted(w.remote_refs)), len(w.unresolved)))
+                         "; ".join(sorted(w.remote_refs)), len(w.unresolved))
+                        + eng.mimic_types.get(override_key(w), ("", "")))
     tables["Windows"] = (["Window", "Source", "File", "# Tags", "# I/O Tags",
                           "Access Names", "Opens Windows", "Remote References",
-                          "# Undefined Refs"], win_rows)
+                          "# Undefined Refs", "Mimic Type", "Type From"], win_rows)
 
     wt_rows = []
     for w in sorted(r.sources, key=lambda s: (not s.is_window, s.name.lower())):
@@ -115,10 +149,11 @@ def build_tables(r: AnalysisResult) -> Dict[str, Table]:
     return tables
 
 
-def export_excel(r: AnalysisResult, path: str) -> None:
+def export_excel(r: AnalysisResult, path: str,
+                 eng: Optional[EngineeringSummary] = None) -> None:
     try:
         from openpyxl import Workbook
-        from openpyxl.styles import Font, PatternFill
+        from openpyxl.styles import Alignment, Font, PatternFill
         from openpyxl.utils import get_column_letter
     except ImportError as exc:  # pragma: no cover - depends on environment
         raise RuntimeError("Excel export needs openpyxl: pip install openpyxl") from exc
@@ -127,7 +162,8 @@ def export_excel(r: AnalysisResult, path: str) -> None:
     wb.remove(wb.active)
     header_font = Font(bold=True, color="FFFFFF")
     header_fill = PatternFill("solid", fgColor="305496")
-    for name, (headers, rows) in build_tables(r).items():
+    wrap = Alignment(wrap_text=True, vertical="top")
+    for name, (headers, rows) in build_tables(r, eng).items():
         ws = wb.create_sheet(name[:31])
         ws.append(headers)
         for cell in ws[1]:
@@ -135,19 +171,24 @@ def export_excel(r: AnalysisResult, path: str) -> None:
             cell.fill = header_fill
         for row in rows:
             ws.append(list(row))
+            if any(isinstance(v, str) and "\n" in v for v in row):
+                for cell in ws[ws.max_row]:
+                    cell.alignment = wrap
         ws.freeze_panes = "A2"
         if rows:
             ws.auto_filter.ref = ws.dimensions
         for idx, h in enumerate(headers, start=1):
-            width = max([len(str(h))] + [len(str(row[idx - 1])) for row in rows[:500]])
+            width = max([len(str(h))] + [len(line) for row in rows[:500]
+                                          for line in str(row[idx - 1]).splitlines() or [""]])
             ws.column_dimensions[get_column_letter(idx)].width = min(max(width + 2, 8), 60)
     wb.save(path)
 
 
-def export_csv(r: AnalysisResult, folder: str) -> List[str]:
+def export_csv(r: AnalysisResult, folder: str,
+               eng: Optional[EngineeringSummary] = None) -> List[str]:
     os.makedirs(folder, exist_ok=True)
     written = []
-    for name, (headers, rows) in build_tables(r).items():
+    for name, (headers, rows) in build_tables(r, eng).items():
         path = os.path.join(folder, name.replace(" ", "_").lower() + ".csv")
         with open(path, "w", newline="", encoding="utf-8-sig") as fh:
             w = csv.writer(fh)

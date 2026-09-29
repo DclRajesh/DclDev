@@ -18,6 +18,8 @@ TAG_NAME_RE = re.compile(rf"[A-Za-z_!@?#$%\\&][{_TAG_CHARS}]*")
 # An identifier optionally followed by .DotField(s).
 TOKEN_RE = re.compile(rf"[A-Za-z_!@?#$%\\&][{_TAG_CHARS}]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
 _SPLIT_RE = re.compile(r"[\-!@?%&\\#]+")
+# "Tag = ..." (assignment, not "==") right after a token.
+_ASSIGN_RE = re.compile(r"\s*=(?!=)")
 
 _ASCII_RE = re.compile(rb"[\x20-\x7e\t]{3,}")
 _UTF16_RE = re.compile(rb"(?:[\x20-\x7e\t]\x00){3,}")
@@ -64,11 +66,12 @@ class RefMatcher:
         self.access_keys: Set[str] = set(access_keys)
 
     def scan(self, texts: Iterable[str]):
-        """Return (refs dict, unresolved set, remote refs set, windows opened)."""
+        """Return (refs, unresolved, remote refs, windows opened, tags written)."""
         refs: Dict[str, int] = {}
         unresolved: Set[str] = set()
         remote: Set[str] = set()
         opens: Set[str] = set()
+        writes: Set[str] = set()
         for text in texts:
             for m in NAV_RE.finditer(text):
                 opens.add(m.group(1).strip())
@@ -84,12 +87,14 @@ class RefMatcher:
                 keys = self._resolve(base)
                 for key in keys:
                     refs[key] = refs.get(key, 0) + 1
+                if len(keys) == 1 and _ASSIGN_RE.match(text, m.end()):
+                    writes.add(keys[0])
                 if not keys:
                     first_field = field.split(".", 1)[0].lower()
                     if (first_field in DOTFIELDS and not base.startswith("$")
                             and self.tag_keys and len(base) <= 32):
                         unresolved.add(base)
-        return refs, unresolved, remote, opens
+        return refs, unresolved, remote, opens, writes
 
     def _resolve(self, base: str) -> List[str]:
         key = base.lower()

@@ -12,10 +12,14 @@ from typing import Callable, List, Optional, Sequence
 
 from . import __version__
 from .analyzer import analyze
+from .classify import (DEFAULT_RULES, MIMIC_TYPES, engineering_summary, load_overrides,
+                       load_rules, override_key, save_settings, validate_rules)
 from .export import build_tables, export_csv, export_excel, history_rows, summary_rows
 from .models import AnalysisResult
 
 ALL = "(All)"
+AUTO = "(Auto)"
+IO_CLASSES = ["AI", "AO", "DI", "DO", "PULSE", "MSG"]
 
 
 class DataTable(ttk.Frame):
@@ -107,6 +111,9 @@ class App(tk.Tk):
         self.geometry("1280x800")
         self.minsize(900, 550)
         self.result: Optional[AnalysisResult] = None
+        self.rules = load_rules()
+        self.overrides: dict = {}
+        self.eng = None
         self._queue: "queue.Queue" = queue.Queue()
         self._tables = {}
 
@@ -142,6 +149,8 @@ class App(tk.Tk):
         self.analyse_btn.pack(fill="x")
         ttk.Checkbutton(opts, text="Scan scripts/other files",
                         variable=self.other_var).pack(anchor="w", pady=(4, 0))
+        ttk.Button(opts, text="Classification rules...",
+                   command=self._edit_rules).pack(fill="x", pady=(4, 0))
 
         exp = ttk.Frame(bar)
         exp.grid(row=0, column=4, rowspan=3, sticky="ns", padx=(12, 0))
@@ -210,11 +219,14 @@ class App(tk.Tk):
             var.trace_add("write", lambda *_: self._filter_tags())
         self.tags_table = DataTable(
             f, ["Tag", "Type", "Category", "Access Name", "Item", "Group", "Comment",
-                "Alarm", "History", "Used", "# Windows", "Windows"],
+                "Alarm", "History", "Used", "# Windows", "Windows", "I/O Class"],
             {"Tag": 200, "Type": 100, "Category": 70, "Access Name": 110, "Item": 150,
              "Group": 90, "Comment": 200, "Alarm": 50, "History": 120, "Used": 45,
-             "# Windows": 70, "Windows": 300},
+             "# Windows": 70, "Windows": 300, "I/O Class": 65},
             on_activate=self._show_tag_detail)
+        self.tags_table.tree.configure(displaycolumns=(
+            "Tag", "Type", "I/O Class", "Category", "Access Name", "Item", "Group", "Comment",
+            "Alarm", "History", "Used", "# Windows", "Windows"))
         self.tags_table.pack(fill="both", expand=True)
         ttk.Label(f, text="Double-click a tag to see where it is used.",
                   foreground="gray").pack(anchor="w")
@@ -243,13 +255,29 @@ class App(tk.Tk):
         filt.pack(fill="x")
         self.win_search = tk.StringVar()
         ttk.Label(filt, text="Search:").pack(side="left")
-        ttk.Entry(filt, textvariable=self.win_search, width=30).pack(side="left", padx=4)
-        self.win_search.trace_add("write", lambda *_: self._filter_windows())
+        ttk.Entry(filt, textvariable=self.win_search, width=20).pack(side="left", padx=4)
+        self.win_type_filter = tk.StringVar(value=ALL)
+        ttk.Label(filt, text="Type:").pack(side="left", padx=(8, 0))
+        ttk.Combobox(filt, textvariable=self.win_type_filter, state="readonly", width=9,
+                     values=[ALL] + list(MIMIC_TYPES)).pack(side="left", padx=4)
+        for var in (self.win_search, self.win_type_filter):
+            var.trace_add("write", lambda *_: self._filter_windows())
+        setf = ttk.Frame(left, padding=(0, 0, 0, 4))
+        setf.pack(fill="x")
+        ttk.Label(setf, text="Set type of selected mimic:").pack(side="left")
+        self.win_set_type = tk.StringVar(value=AUTO)
+        ttk.Combobox(setf, textvariable=self.win_set_type, state="readonly", width=9,
+                     values=[AUTO] + list(MIMIC_TYPES)).pack(side="left", padx=4)
+        ttk.Button(setf, text="Apply", command=self._apply_mimic_type).pack(side="left")
         self.win_table = DataTable(
-            left, ["Window", "Source", "# Tags", "# I/O Tags", "Access Names", "File"],
-            {"Window": 180, "Source": 100, "# Tags": 60, "# I/O Tags": 70,
-             "Access Names": 150, "File": 180},
+            left, ["Window", "Source", "# Tags", "# I/O Tags", "Access Names", "File",
+                   "Mimic Type", "Type From"],
+            {"Window": 180, "Source": 100, "# Tags": 55, "# I/O Tags": 65,
+             "Access Names": 150, "File": 180, "Mimic Type": 80, "Type From": 85},
             on_select=self._show_window)
+        self.win_table.tree.configure(displaycolumns=(
+            "Window", "Mimic Type", "# Tags", "# I/O Tags", "Access Names", "Type From",
+            "Source", "File"))
         self.win_table.pack(fill="both", expand=True)
         self.win_info = tk.Text(right, height=5, wrap="word", relief="flat",
                                 background=self.cget("background"))
@@ -359,40 +387,56 @@ class App(tk.Tk):
         self.analyse_btn.configure(state="normal")
         self.excel_btn.configure(state="normal")
         self.csv_btn.configure(state="normal")
-        self._tables = build_tables(res)
-
-        self.summary.set_rows(summary_rows(res) +
-                              [("Warning", w) for w in res.warnings])
-        hist = history_rows(res)
-        self.history_table.set_rows(hist)
-        self.tag_hist_cb.configure(values=[ALL, "Logged (any)"] + [d for d, _, _ in hist]
-                                   + ["Not logged"])
-        self.tag_hist.set(ALL)
-        cats = sorted({t.category for t in res.tags.values()})
-        types = sorted(res.type_counts())
-        self.tag_cat_cb.configure(values=[ALL] + cats +
-                                  [t for t in types if t not in cats])
-        self.tag_access_cb.configure(
-            values=[ALL] + sorted({t.access_name for t in res.tags.values() if t.access_name},
-                                  key=str.lower))
+        self.overrides = load_overrides(res.app_path)
         self.tag_search.set("")
         self.tag_cat.set(ALL)
         self.tag_access.set(ALL)
         self.tag_used.set(ALL)
-        self.tags_table.set_rows([r[:12] for r in self._tables["Tags"][1]])
+        self.win_search.set("")
+        self.win_type_filter.set(ALL)
+        self._refresh()
+        self.status_var.set(
+            f"Analysed {os.path.basename(res.app_path)}: {len(res.tags)} tags, "
+            f"{len(res.io_tags)} I/O, {len(res.access_names)} access names, "
+            f"{len(res.windows)} windows.")
+
+    def _refresh(self):
+        """(Re)build all views from the result, rules and mimic overrides."""
+        res = self.result
+        if not res:
+            return
+        self.eng = engineering_summary(res, self.rules, self.overrides)
+        self._tables = build_tables(res, self.eng)
+
+        summary = []
+        for item, value in summary_rows(res, self.eng):
+            lines = str(value).split("\n")
+            summary.append((item, lines[0]))
+            summary.extend(("", line) for line in lines[1:])
+        self.summary.set_rows(summary + [("Warning", w) for w in res.warnings])
+        hist = history_rows(res)
+        self.history_table.set_rows(hist)
+        self.tag_hist_cb.configure(values=[ALL, "Logged (any)"] + [d for d, _, _ in hist]
+                                   + ["Not logged"])
+        if self.tag_hist.get() not in self.tag_hist_cb.cget("values"):
+            self.tag_hist.set(ALL)
+        cats = sorted({t.category for t in res.tags.values()})
+        types = sorted(res.type_counts())
+        self.tag_cat_cb.configure(values=[ALL] + cats + IO_CLASSES +
+                                  [t for t in types if t not in cats])
+        self.tag_access_cb.configure(
+            values=[ALL] + sorted({t.access_name for t in res.tags.values() if t.access_name},
+                                  key=str.lower))
+        self.tags_table.set_rows([r[:12] + (r[13],) for r in self._tables["Tags"][1]])
         self._filter_tags()
         self.access_table.set_rows(self._tables["Access Names"][1])
-        self.win_table.set_rows([(r[0], r[1], r[3], r[4], r[5], r[2])
+        self.win_table.set_rows([(r[0], r[1], r[3], r[4], r[5], r[2], r[9], r[10])
                                  for r in self._tables["Windows"][1]])
         self._filter_windows()
         self.map_table.set_rows(self._tables["Window-Tag Map"][1])
         self._filter_map()
         self.issues_table.set_rows(self._tables["Issues"][1])
         self.notebook.tab(5, text=f"Issues ({len(self._tables['Issues'][1])})")
-        self.status_var.set(
-            f"Analysed {os.path.basename(res.app_path)}: {len(res.tags)} tags, "
-            f"{len(res.io_tags)} I/O, {len(res.access_names)} access names, "
-            f"{len(res.windows)} windows.")
 
     # --------------------------------------------------------------- filters
     def _filter_tags(self):
@@ -400,7 +444,7 @@ class App(tk.Tk):
         cat, acc, used = self.tag_cat.get(), self.tag_access.get(), self.tag_used.get()
         hist = self.tag_hist.get()
         rows = [r for r in self.tags_table.rows
-                if (cat == ALL or cat in (r[1], r[2]))
+                if (cat == ALL or cat in (r[1], r[2], r[12]))
                 and (hist == ALL or r[8] == hist
                      or (hist == "Logged (any)" and r[8] != "Not logged"))
                 and (acc == ALL or r[3].lower() == acc.lower())
@@ -411,8 +455,10 @@ class App(tk.Tk):
 
     def _filter_windows(self):
         text = self.win_search.get().strip().lower()
+        wtype = self.win_type_filter.get()
         self.win_table.show([r for r in self.win_table.rows
-                             if not text or text in r[0].lower() or text in r[5].lower()])
+                             if (not text or text in r[0].lower() or text in r[5].lower())
+                             and (wtype == ALL or r[6] == wtype)])
 
     def _filter_map(self):
         text = self.map_search.get().strip().lower()
@@ -435,6 +481,39 @@ class App(tk.Tk):
         self.tag_access.set(row[0])
         self.notebook.select(1)
 
+    # ------------------------------------------------------ classification
+    def _apply_mimic_type(self):
+        row = self.win_table.selected_row()
+        if not self.result or row is None:
+            messagebox.showinfo("Mimic type", "Select a mimic in the list first.")
+            return
+        src = next((s for s in self.result.windows
+                    if s.name == row[0] and s.path == row[5]), None)
+        if src is None:
+            return
+        key = override_key(src)
+        if self.win_set_type.get() == AUTO:
+            self.overrides.pop(key, None)
+        else:
+            self.overrides[key] = self.win_set_type.get()
+        try:
+            save_settings(app_path=self.result.app_path, overrides=self.overrides)
+        except OSError as exc:
+            messagebox.showwarning("Mimic type", f"Could not save the override:\n{exc}")
+        self._refresh()
+        self.status_var.set(f"Mimic '{src.name}' set to {self.win_set_type.get()}")
+
+    def _edit_rules(self):
+        RulesDialog(self, self.rules, self._rules_saved)
+
+    def _rules_saved(self, rules):
+        self.rules = rules
+        try:
+            save_settings(rules=rules)
+        except OSError as exc:
+            messagebox.showwarning("Rules", f"Could not save the rules:\n{exc}")
+        self._refresh()
+
     # --------------------------------------------------------------- details
     def _show_window(self, row):
         res = self.result
@@ -451,6 +530,7 @@ class App(tk.Tk):
                          count, t.comment if t else ""))
         rows.sort(key=lambda r: r[0].lower())
         self.win_tags.set_rows(rows)
+        self.win_set_type.set(self.overrides.get(override_key(src), AUTO))
         info = [f"Window: {src.name}   ({src.kind}, {src.path}, {src.size:,} bytes)"]
         if src.opens_windows:
             info.append("Opens windows: " + ", ".join(sorted(src.opens_windows)))
@@ -485,6 +565,7 @@ class App(tk.Tk):
                  f"Item:         {t.item_name}",
                  f"Alarmed:      {'Yes' if t.has_alarm else 'No'}",
                  f"History:      {t.history or 'Not logged'}",
+                 f"I/O class:    {(self.eng.io_classes.get(t.key) if self.eng else '') or '-'}",
                  "",
                  f"Referenced in {len(users)} window(s)/file(s):"]
         for s in sorted(users, key=lambda s: (not s.is_window, s.name.lower())):
@@ -512,7 +593,7 @@ class App(tk.Tk):
         if not path:
             return
         try:
-            export_excel(self.result, path)
+            export_excel(self.result, path, self.eng)
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("Export failed", str(exc))
             return
@@ -527,12 +608,90 @@ class App(tk.Tk):
             return
         folder = os.path.join(folder, self._default_name())
         try:
-            files = export_csv(self.result, folder)
+            files = export_csv(self.result, folder, self.eng)
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("Export failed", str(exc))
             return
         self.status_var.set(f"Exported {len(files)} CSV files to {folder}")
         messagebox.showinfo("Export", f"{len(files)} CSV files saved to:\n{folder}")
+
+
+class RulesDialog(tk.Toplevel):
+    """Edit the regular expressions used to classify mimics and I/O points."""
+
+    LABELS = {
+        "popup_windows": "Popup (on top) mimic names",
+        "overlay_windows": "Overlay mimic names",
+        "other_windows": "Other / excluded mimic names",
+        "pulse_tags": "PULSE I/O (discrete)",
+        "output_tags": "Output I/O (DO / AO)",
+        "input_tags": "Input I/O (DI / AI)",
+    }
+
+    def __init__(self, master, rules, on_save):
+        super().__init__(master)
+        self.title("Classification rules")
+        self.geometry("820x560")
+        self.transient(master)
+        self.on_save = on_save
+        body = ttk.Frame(self, padding=10)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, wraplength=780, justify="left", text=(
+            "Rules are case-insensitive regular expressions (Python syntax). "
+            "Mimic rules are matched against the window name and are only used when the "
+            "window type is not known from an XML export or set manually. I/O rules are "
+            "matched against the tag name, comment and item; tags matching none of them "
+            "are inputs unless ReadOnly = No and a script writes to them.")).pack(anchor="w")
+        grid = ttk.Frame(body)
+        grid.pack(fill="x", pady=8)
+        self.vars = {}
+        for i, (key, label) in enumerate(self.LABELS.items()):
+            ttk.Label(grid, text=label + ":").grid(row=i, column=0, sticky="w", pady=2)
+            var = tk.StringVar(value=str(rules.get(key, "")))
+            ttk.Entry(grid, textvariable=var).grid(row=i, column=1, sticky="ew", padx=6)
+            self.vars[key] = var
+        grid.columnconfigure(1, weight=1)
+        self.writes_var = tk.BooleanVar(value=bool(rules.get("script_writes_are_outputs")))
+        ttk.Checkbutton(body, variable=self.writes_var, text=(
+            "Tags written by scripts (Tag = ...) are outputs")).pack(anchor="w")
+        ttk.Label(body, text="Measurement categories for historisation "
+                  "(one per line: Name = regex, first match wins):").pack(anchor="w", pady=(8, 2))
+        self.cats = tk.Text(body, height=10, wrap="none")
+        self.cats.pack(fill="both", expand=True)
+        self._set_categories(rules.get("measurement_categories", []))
+        btns = ttk.Frame(body)
+        btns.pack(fill="x", pady=(8, 0))
+        ttk.Button(btns, text="Restore defaults", command=self._defaults).pack(side="left")
+        ttk.Button(btns, text="Cancel", command=self.destroy).pack(side="right")
+        ttk.Button(btns, text="Save", command=self._save).pack(side="right", padx=6)
+
+    def _set_categories(self, cats):
+        self.cats.delete("1.0", "end")
+        self.cats.insert("1.0", "\n".join(f"{n} = {p}" for n, p in cats))
+
+    def _defaults(self):
+        for key, var in self.vars.items():
+            var.set(DEFAULT_RULES[key])
+        self.writes_var.set(DEFAULT_RULES["script_writes_are_outputs"])
+        self._set_categories(DEFAULT_RULES["measurement_categories"])
+
+    def _save(self):
+        rules = dict(DEFAULT_RULES)
+        rules.update({k: v.get().strip() for k, v in self.vars.items()})
+        rules["script_writes_are_outputs"] = self.writes_var.get()
+        cats = []
+        for line in self.cats.get("1.0", "end").splitlines():
+            if "=" in line:
+                name, pat = line.split("=", 1)
+                if name.strip() and pat.strip():
+                    cats.append([name.strip(), pat.strip()])
+        rules["measurement_categories"] = cats
+        errors = validate_rules(rules)
+        if errors:
+            messagebox.showerror("Invalid rule", "\n".join(errors), parent=self)
+            return
+        self.destroy()
+        self.on_save(rules)
 
 
 def main(app_path: Optional[str] = None, dbdump: Optional[str] = None,
