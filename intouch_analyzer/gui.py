@@ -12,7 +12,7 @@ from typing import Callable, List, Optional, Sequence
 
 from . import __version__
 from .analyzer import analyze
-from .export import build_tables, export_csv, export_excel, summary_rows
+from .export import build_tables, export_csv, export_excel, history_rows, summary_rows
 from .models import AnalysisResult
 
 ALL = "(All)"
@@ -112,6 +112,7 @@ class App(tk.Tk):
 
         self.app_var = tk.StringVar()
         self.dbdump_var = tk.StringVar()
+        self.history_var = tk.StringVar()
         self.other_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="Select an InTouch application folder and click Analyse.")
 
@@ -131,15 +132,19 @@ class App(tk.Tk):
         ttk.Entry(bar, textvariable=self.dbdump_var).grid(row=1, column=1, sticky="ew", padx=4, pady=(4, 0))
         ttk.Button(bar, text="Browse...", command=self._browse_dbdump).grid(row=1, column=2, pady=(4, 0))
 
+        ttk.Label(bar, text="Historian tag export (optional):").grid(row=2, column=0, sticky="w", pady=(4, 0))
+        ttk.Entry(bar, textvariable=self.history_var).grid(row=2, column=1, sticky="ew", padx=4, pady=(4, 0))
+        ttk.Button(bar, text="Browse...", command=self._browse_history).grid(row=2, column=2, pady=(4, 0))
+
         opts = ttk.Frame(bar)
-        opts.grid(row=0, column=3, rowspan=2, sticky="ns", padx=(12, 0))
+        opts.grid(row=0, column=3, rowspan=3, sticky="ns", padx=(12, 0))
         self.analyse_btn = ttk.Button(opts, text="Analyse", command=self._start_analysis)
         self.analyse_btn.pack(fill="x")
         ttk.Checkbutton(opts, text="Scan scripts/other files",
                         variable=self.other_var).pack(anchor="w", pady=(4, 0))
 
         exp = ttk.Frame(bar)
-        exp.grid(row=0, column=4, rowspan=2, sticky="ns", padx=(12, 0))
+        exp.grid(row=0, column=4, rowspan=3, sticky="ns", padx=(12, 0))
         self.excel_btn = ttk.Button(exp, text="Export Excel...", command=self._export_excel,
                                     state="disabled")
         self.excel_btn.pack(fill="x")
@@ -165,6 +170,14 @@ class App(tk.Tk):
         nb.add(f, text="Summary")
         self.summary = DataTable(f, ["Item", "Value"], {"Item": 320, "Value": 800})
         self.summary.pack(fill="both", expand=True)
+        ttk.Label(f, text="Historical logging (double-click a rate to list its tags):",
+                  font=("TkDefaultFont", 9, "bold")).pack(anchor="w", pady=(6, 2))
+        self.history_table = DataTable(f, ["History / Storage Rate", "Tags", "Breakdown"],
+                                       {"History / Storage Rate": 320, "Tags": 80,
+                                        "Breakdown": 700},
+                                       on_activate=self._filter_by_history)
+        self.history_table.tree.configure(height=6)
+        self.history_table.pack(fill="x")
 
         # Tags
         f = ttk.Frame(nb)
@@ -175,6 +188,7 @@ class App(tk.Tk):
         self.tag_cat = tk.StringVar(value=ALL)
         self.tag_access = tk.StringVar(value=ALL)
         self.tag_used = tk.StringVar(value=ALL)
+        self.tag_hist = tk.StringVar(value=ALL)
         ttk.Label(filt, text="Search:").pack(side="left")
         e = ttk.Entry(filt, textvariable=self.tag_search, width=30)
         e.pack(side="left", padx=4)
@@ -187,15 +201,18 @@ class App(tk.Tk):
         ttk.Label(filt, text="Used:").pack(side="left", padx=(8, 0))
         ttk.Combobox(filt, textvariable=self.tag_used, state="readonly", width=6,
                      values=[ALL, "Yes", "No"]).pack(side="left", padx=4)
+        ttk.Label(filt, text="History:").pack(side="left", padx=(8, 0))
+        self.tag_hist_cb = ttk.Combobox(filt, textvariable=self.tag_hist, state="readonly", width=22)
+        self.tag_hist_cb.pack(side="left", padx=4)
         self.tag_count = ttk.Label(filt, text="")
         self.tag_count.pack(side="right")
-        for var in (self.tag_search, self.tag_cat, self.tag_access, self.tag_used):
+        for var in (self.tag_search, self.tag_cat, self.tag_access, self.tag_used, self.tag_hist):
             var.trace_add("write", lambda *_: self._filter_tags())
         self.tags_table = DataTable(
             f, ["Tag", "Type", "Category", "Access Name", "Item", "Group", "Comment",
-                "Alarm", "Logged", "Used", "# Windows", "Windows"],
+                "Alarm", "History", "Used", "# Windows", "Windows"],
             {"Tag": 200, "Type": 100, "Category": 70, "Access Name": 110, "Item": 150,
-             "Group": 90, "Comment": 200, "Alarm": 50, "Logged": 55, "Used": 45,
+             "Group": 90, "Comment": 200, "Alarm": 50, "History": 120, "Used": 45,
              "# Windows": 70, "Windows": 300},
             on_activate=self._show_tag_detail)
         self.tags_table.pack(fill="both", expand=True)
@@ -272,6 +289,14 @@ class App(tk.Tk):
         if path:
             self.app_var.set(path)
 
+    def _browse_history(self):
+        path = filedialog.askopenfilename(
+            title="Select Historian tag export",
+            filetypes=[("CSV / text", "*.csv *.txt"), ("All files", "*.*")],
+            initialdir=self.app_var.get() or None)
+        if path:
+            self.history_var.set(path)
+
     def _browse_dbdump(self):
         path = filedialog.askopenfilename(
             title="Select DBDump CSV",
@@ -289,6 +314,10 @@ class App(tk.Tk):
         if dbdump and not os.path.isfile(dbdump):
             messagebox.showerror("Analyse", f"DBDump file not found:\n{dbdump}")
             return
+        history = self.history_var.get().strip()
+        if history and not os.path.isfile(history):
+            messagebox.showerror("Analyse", f"Historian file not found:\n{history}")
+            return
         self.analyse_btn.configure(state="disabled")
         self.status_var.set("Analysing...")
 
@@ -296,7 +325,8 @@ class App(tk.Tk):
             try:
                 res = analyze(app, [dbdump] if dbdump else None,
                               include_other_files=self.other_var.get(),
-                              progress=lambda i, n, m: self._queue.put(("progress", i, n, m)))
+                              progress=lambda i, n, m: self._queue.put(("progress", i, n, m)),
+                              history_paths=[history] if history else None)
                 self._queue.put(("done", res))
             except Exception as exc:  # noqa: BLE001 - report any failure to the user
                 self._queue.put(("error", exc, traceback.format_exc()))
@@ -333,6 +363,11 @@ class App(tk.Tk):
 
         self.summary.set_rows(summary_rows(res) +
                               [("Warning", w) for w in res.warnings])
+        hist = history_rows(res)
+        self.history_table.set_rows(hist)
+        self.tag_hist_cb.configure(values=[ALL, "Logged (any)"] + [d for d, _, _ in hist]
+                                   + ["Not logged"])
+        self.tag_hist.set(ALL)
         cats = sorted({t.category for t in res.tags.values()})
         types = sorted(res.type_counts())
         self.tag_cat_cb.configure(values=[ALL] + cats +
@@ -363,8 +398,11 @@ class App(tk.Tk):
     def _filter_tags(self):
         text = self.tag_search.get().strip().lower()
         cat, acc, used = self.tag_cat.get(), self.tag_access.get(), self.tag_used.get()
+        hist = self.tag_hist.get()
         rows = [r for r in self.tags_table.rows
                 if (cat == ALL or cat in (r[1], r[2]))
+                and (hist == ALL or r[8] == hist
+                     or (hist == "Logged (any)" and r[8] != "Not logged"))
                 and (acc == ALL or r[3].lower() == acc.lower())
                 and (used == ALL or r[9] == used)
                 and (not text or any(text in str(v).lower() for v in (r[0], r[3], r[4], r[5], r[6])))]
@@ -381,10 +419,19 @@ class App(tk.Tk):
         self.map_table.show([r for r in self.map_table.rows
                              if not text or any(text in str(v).lower() for v in r[:6])])
 
+    def _filter_by_history(self, row):
+        self.tag_search.set("")
+        self.tag_cat.set(ALL)
+        self.tag_access.set(ALL)
+        self.tag_used.set(ALL)
+        self.tag_hist.set(row[0])
+        self.notebook.select(1)
+
     def _filter_by_access(self, row):
         self.tag_search.set("")
         self.tag_cat.set(ALL)
         self.tag_used.set(ALL)
+        self.tag_hist.set(ALL)
         self.tag_access.set(row[0])
         self.notebook.select(1)
 
@@ -437,7 +484,7 @@ class App(tk.Tk):
                  f"Access name:  {t.access_name}",
                  f"Item:         {t.item_name}",
                  f"Alarmed:      {'Yes' if t.has_alarm else 'No'}",
-                 f"Logged:       {'Yes' if t.is_logged else 'No'}",
+                 f"History:      {t.history or 'Not logged'}",
                  "",
                  f"Referenced in {len(users)} window(s)/file(s):"]
         for s in sorted(users, key=lambda s: (not s.is_window, s.name.lower())):
@@ -489,12 +536,14 @@ class App(tk.Tk):
 
 
 def main(app_path: Optional[str] = None, dbdump: Optional[str] = None,
-         auto_run: bool = False):
+         auto_run: bool = False, history: Optional[str] = None):
     app = App()
     if app_path:
         app.app_var.set(app_path)
     if dbdump:
         app.dbdump_var.set(dbdump)
+    if history:
+        app.history_var.set(history)
     if app_path and auto_run:
         app.after(200, app._start_analysis)
     app.mainloop()

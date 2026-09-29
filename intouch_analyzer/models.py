@@ -32,6 +32,7 @@ class Tag:
     item_name: str = ""
     source: str = ""
     attributes: Dict[str, str] = field(default_factory=dict)
+    history: str = ""  # e.g. "Cyclic 10 s", "On change", "Not logged"
 
     @property
     def key(self) -> str:
@@ -68,7 +69,7 @@ class Tag:
 
     @property
     def is_logged(self) -> bool:
-        return _attr(self.attributes, "Logged").strip().lower() == "yes"
+        return bool(self.history) and self.history != "Not logged"
 
     def get(self, key: str) -> str:
         return _attr(self.attributes, key)
@@ -123,6 +124,7 @@ class AnalysisResult:
     access_names: Dict[str, AccessName] = field(default_factory=dict)
     sources: List[Source] = field(default_factory=list)
     tag_db_source: str = ""
+    history_source: str = ""
     warnings: List[str] = field(default_factory=list)
 
     # ---- convenience views -------------------------------------------------
@@ -165,6 +167,14 @@ class AnalysisResult:
                 by_addr[f"{t.access_name}:{t.item_name}".lower()].append(t)
         return sorted(((v[0].io_address, v) for v in by_addr.values() if len(v) > 1),
                       key=lambda x: x[0].lower())
+
+    def history_counts(self) -> Dict[str, Counter]:
+        """history description -> Counter of tag categories (I/O, Memory...)."""
+        out: Dict[str, Counter] = defaultdict(Counter)
+        for t in self.tags.values():
+            if t.is_logged:
+                out[t.history][t.category] += 1
+        return dict(out)
 
     def type_counts(self) -> Counter:
         return Counter(t.tag_type for t in self.tags.values())

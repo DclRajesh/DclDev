@@ -9,6 +9,7 @@ from typing import Callable, Iterable, List, Optional, Sequence, Tuple
 
 from .binscan import RefMatcher, extract_strings
 from .dbdump import looks_like_dbdump, parse_dbdump, parse_tagname_x
+from .history import describe_history, parse_history_file
 from .models import AnalysisResult, Source
 
 ProgressFn = Callable[[int, int, str], None]
@@ -74,12 +75,16 @@ def _walk(app_path: str) -> List[str]:
 def analyze(app_path: str,
             dbdump_paths: Optional[Sequence[str]] = None,
             include_other_files: bool = True,
-            progress: Optional[ProgressFn] = None) -> AnalysisResult:
+            progress: Optional[ProgressFn] = None,
+            history_paths: Optional[Sequence[str]] = None) -> AnalysisResult:
     """Analyse an InTouch application folder.
 
     ``dbdump_paths``: DBDump CSV file(s). When omitted, CSV files in the
     application folder that look like DBDump output are used, and failing
     that tag names are extracted heuristically from ``tagname.x``.
+
+    ``history_paths``: optional Historian tag export(s) giving each tag's
+    storage type/rate; these override the logging settings in the DBDump.
     """
     if not os.path.isdir(app_path):
         raise FileNotFoundError(f"Application folder not found: {app_path}")
@@ -93,7 +98,8 @@ def analyze(app_path: str,
         csvs = list(dbdump_paths)
     else:
         csvs = [f for f in files if f.lower().endswith(".csv") and looks_like_dbdump(f)]
-    tag_db_files = {os.path.abspath(f) for f in csvs}
+    # Tag DB / history inputs are not scanned for references.
+    tag_db_files = {os.path.abspath(f) for f in list(csvs) + list(history_paths or [])}
     for path in csvs:
         tags, access, warns = parse_dbdump(path)
         result.warnings.extend(warns)
@@ -120,6 +126,8 @@ def analyze(app_path: str,
             result.warnings.append(
                 "No tag database found (no DBDump CSV and no tagname.x). "
                 "Window/tag cross-reference is not possible.")
+
+    _apply_history(result, csvs, history_paths or [])
 
     matcher = RefMatcher(result.tags.keys(), result.access_names.keys())
 
@@ -157,6 +165,32 @@ def analyze(app_path: str,
         result.warnings.append("No window files (*.win or exported XML windows) were found.")
     report(len(files), len(files), "Done")
     return result
+
+
+def _apply_history(result: AnalysisResult, dbdumps: Sequence[str],
+                   history_paths: Sequence[str]) -> None:
+    for t in result.tags.values():
+        t.history = describe_history(t.attributes)
+    if dbdumps:
+        result.history_source = "DBDump (Logged / LogDeadband)"
+    for path in history_paths:
+        entries = parse_history_file(path)
+        unmatched = 0
+        for name, desc in entries.items():
+            # Historian names may carry a node/prefix: "Node.TagName".
+            tag = result.tags.get(name) or result.tags.get(name.rsplit(".", 1)[-1])
+            if tag:
+                tag.history = desc
+            else:
+                unmatched += 1
+        base = os.path.basename(path)
+        result.history_source = ", ".join(filter(None, [result.history_source, base]))
+        if not entries:
+            result.warnings.append(f"{base}: no tag storage settings found")
+        elif unmatched:
+            result.warnings.append(
+                f"{base}: {unmatched} of {len(entries)} historised tags are not in the "
+                "InTouch tag database")
 
 
 def _make_source(matcher: RefMatcher, name: str, rel: str, kind: str, size: int,

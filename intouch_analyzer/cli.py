@@ -20,6 +20,8 @@ def main(argv=None) -> int:
     p.add_argument("app_folder", nargs="?", help="InTouch application folder")
     p.add_argument("--dbdump", action="append",
                    help="DBDump CSV file (repeatable). Default: auto-detect in folder")
+    p.add_argument("--history", action="append",
+                   help="Historian tag export with StorageType/StorageRate (repeatable)")
     p.add_argument("--excel", help="Write an Excel report (no GUI)")
     p.add_argument("--csv", help="Write CSV reports into this folder (no GUI)")
     p.add_argument("--no-other", action="store_true",
@@ -30,13 +32,15 @@ def main(argv=None) -> int:
     if not (args.excel or args.csv or args.summary):
         from .gui import main as gui_main
         gui_main(args.app_folder, args.dbdump[0] if args.dbdump else None,
-                 auto_run=bool(args.app_folder))
+                 auto_run=bool(args.app_folder),
+                 history=args.history[0] if args.history else None)
         return 0
 
     if not args.app_folder:
         p.error("app_folder is required for --excel/--csv/--summary")
     try:
-        res = analyze(args.app_folder, args.dbdump, include_other_files=not args.no_other)
+        res = analyze(args.app_folder, args.dbdump, include_other_files=not args.no_other,
+                      history_paths=args.history)
     except FileNotFoundError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2

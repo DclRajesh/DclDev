@@ -6,6 +6,7 @@ import csv
 import os
 from typing import Dict, List, Sequence, Tuple
 
+from .history import history_sort_key
 from .models import AnalysisResult
 
 Table = Tuple[List[str], List[Sequence]]
@@ -29,13 +30,25 @@ def summary_rows(r: AnalysisResult) -> List[Tuple[str, str]]:
         ("Unused tags", str(len(r.unused_tags()))),
         ("Duplicate I/O addresses", str(len(r.duplicate_io_addresses()))),
         ("Alarmed tags", str(sum(1 for t in r.tags.values() if t.has_alarm))),
-        ("Logged tags", str(sum(1 for t in r.tags.values() if t.is_logged))),
+        ("Historised (logged) tags", str(sum(1 for t in r.tags.values() if t.is_logged))),
+        ("History source", r.history_source or "none"),
     ]
+    for desc, total, detail in history_rows(r):
+        rows.append((f"  History: {desc}",
+                     f"{total} tag{'' if total == 1 else 's'} ({detail})"))
     for ttype, n in sorted(r.type_counts().items()):
         rows.append((f"  Tag type: {ttype}", str(n)))
     for acc in sorted(r.access_names.values(), key=lambda a: a.key):
         rows.append((f"  Access name: {acc.name}", f"{per_access.get(acc.key, 0)} tags"))
     return rows
+
+
+def history_rows(r: AnalysisResult) -> List[Tuple[str, int, str]]:
+    """[(history description, tag count, 'I/O a, Memory b')] fastest rate first."""
+    counts = r.history_counts()
+    return [(d, sum(counts[d].values()),
+             ", ".join(f"{c} {n}" for c, n in sorted(counts[d].items())))
+            for d in sorted(counts, key=history_sort_key)]
 
 
 def build_tables(r: AnalysisResult) -> Dict[str, Table]:
@@ -51,11 +64,11 @@ def build_tables(r: AnalysisResult) -> Dict[str, Table]:
         wins = win_usage.get(t.key, [])
         others = [s.name for s in usage.get(t.key, []) if not s.is_window]
         tag_rows.append((t.name, t.tag_type, t.category, t.access_name, t.item_name,
-                         t.group, t.comment, _yn(t.has_alarm), _yn(t.is_logged),
+                         t.group, t.comment, _yn(t.has_alarm), t.history or "Not logged",
                          _yn(t.key in usage), len(wins), "; ".join(sorted(wins)),
                          "; ".join(sorted(others))))
     tables["Tags"] = (["Tag", "Type", "Category", "Access Name", "Item", "Group",
-                       "Comment", "Alarm", "Logged", "Used", "# Windows",
+                       "Comment", "Alarm", "History", "Used", "# Windows",
                        "Windows", "Other Files"], tag_rows)
 
     tables["Access Names"] = (
@@ -64,6 +77,13 @@ def build_tables(r: AnalysisResult) -> Dict[str, Table]:
         [(a.name, a.application, a.topic, a.advise_active, a.protocol,
           a.sec_application, a.sec_topic, per_access.get(a.key, 0))
          for a in sorted(r.access_names.values(), key=lambda a: a.key)])
+
+    counts = r.history_counts()
+    categories = sorted({c for cats in counts.values() for c in cats})
+    tables["History Rates"] = (
+        ["History / Storage Rate", "Tags"] + categories,
+        [(d, sum(counts[d].values())) + tuple(counts[d].get(c, 0) for c in categories)
+         for d in sorted(counts, key=history_sort_key)])
 
     win_rows = []
     for w in sorted(r.windows, key=lambda w: w.name.lower()):
