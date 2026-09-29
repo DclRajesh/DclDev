@@ -1,0 +1,2 @@
+# Optional: needed only for Excel export (CSV export works without it)
+openpyxl>=3.0
