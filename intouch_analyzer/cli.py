@@ -11,7 +11,7 @@ import argparse
 import sys
 
 from .analyzer import analyze
-from .export import export_csv, export_excel, summary_rows
+from .export import details_rows, export_csv, export_excel, summary_rows
 
 
 def main(argv=None) -> int:
@@ -26,7 +26,9 @@ def main(argv=None) -> int:
     p.add_argument("--csv", help="Write CSV reports into this folder (no GUI)")
     p.add_argument("--no-other", action="store_true",
                    help="Only scan windows, not scripts/other files")
-    p.add_argument("--summary", action="store_true", help="Print summary (no GUI)")
+    p.add_argument("--summary", action="store_true", help="Print the report (no GUI)")
+    p.add_argument("--details", action="store_true",
+                   help="Also print the supporting details (with --summary/--excel/--csv)")
     args = p.parse_args(argv)
 
     if not (args.excel or args.csv or args.summary):
@@ -44,8 +46,18 @@ def main(argv=None) -> int:
     except FileNotFoundError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
-    for item, value in summary_rows(res):
-        print(f"{item:40} {value}")
+
+    def show(rows):
+        for item, value in rows:
+            lines = str(value).splitlines() or [""]
+            print(f"{item:45} {lines[0]}")
+            for line in lines[1:]:
+                print(f"{'':45} {line}")
+
+    show(summary_rows(res))
+    if args.details:
+        print()
+        show(details_rows(res))
     for w in res.warnings:
         print(f"WARNING: {w}", file=sys.stderr)
     if args.excel:

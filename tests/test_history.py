@@ -3,7 +3,7 @@ import tempfile
 import unittest
 
 from intouch_analyzer.analyzer import analyze
-from intouch_analyzer.export import build_tables, history_rows, summary_rows
+from intouch_analyzer.export import build_tables, details_rows, history_rows
 from intouch_analyzer.history import describe_history, parse_history_file
 
 DBDUMP = """:mode=ask
@@ -73,7 +73,7 @@ class HistoryAnalysisTest(unittest.TestCase):
         self.assertEqual(rows["On change"], (4, "I/O 3, Memory 1"))
         self.assertEqual(rows["On change (deadband 0.5)"], (1, "I/O 1"))
         self.assertNotIn("Not logged", rows)
-        summary = dict(summary_rows(res))
+        summary = dict(details_rows(res))
         self.assertEqual(summary["Historised (logged) tags"], "5")
         self.assertEqual(summary["  History: On change"], "4 tags (I/O 3, Memory 1)")
 

@@ -215,32 +215,37 @@ class EngineeringSummary:
     history_models: List[Tuple[str, str, int]]  # (category, model, count)
     plc_connections: List[str]
 
-    def rows(self, total_mimics: int, total_io: int) -> List[Tuple[str, str]]:
+    def rows(self, total_mimics: int, total_io: int) -> List[Tuple[str, object]]:
+        """The analysis report, in the standard format. Counts are ints."""
         c, io = self.mimic_counts, self.io_counts
-        mimic_break = f"Process - {c[PROCESS]} / Popups (On Top + Overlay) - {c[POPUP] + c[OVERLAY]}"
-        if c[POPUP] or c[OVERLAY]:
-            mimic_break += f" (On Top {c[POPUP]}, Overlay {c[OVERLAY]})"
-        if c[OTHER]:
-            mimic_break += f" / Other - {c[OTHER]}"
         analog = io["AI"] + io["AO"]
         digital = io["DI"] + io["DO"] + io["PULSE"]
-        types = f"Analogues - {analog} / Digital - {digital}"
-        if io["MSG"]:
-            types += f" / Message - {io['MSG']}"
         return [
-            ("Number of mimics", str(total_mimics)),
-            ("Mimic Breakdown by type (Process, Popups)", mimic_break),
-            ("Number of data points (I/O tags)", str(total_io)),
-            ("Breakdown by type (DI / DO / AI / AO)", types),
+            ("Number of mimics", total_mimics),
+            ("Mimic Breakdown by type (Process, Popups)",
+             f"Process - {c[PROCESS]} / Popups (On Top + Overlay) - {c[POPUP] + c[OVERLAY]}"),
+            ("Number of data points (I/O tags)", total_io),
+            ("Breakdown by type (DI / DO / AI / AO)",
+             f"Analogues - {analog} / Digital - {digital}"),
             ("   of which (DI / DO / AI / AO)",
              f"AI {io['AI']} / AO {io['AO']} / DI {io['DI']} / DO {io['DO']} / PULSE {io['PULSE']}"),
-            ("Number of configured alarms",
-             f"{self.alarm_conditions}" + (f" (on {self.alarmed_tags} tags)"
-                                           if self.alarmed_tags != self.alarm_conditions else "")),
-            ("Number of historised points", str(self.historised)),
+            ("Number of configured alarms", self.alarm_conditions),
+            ("Number of historised points", self.historised),
             ("Historisation rate", "\n".join(self.history_model_lines()) or "None"),
-            ("Number of PLC connections", str(len(self.plc_connections))
-             + (f" ({', '.join(self.plc_connections)})" if self.plc_connections else "")),
+            ("Number of PLC connections", len(self.plc_connections)),
+        ]
+
+    def detail_rows(self) -> List[Tuple[str, object]]:
+        """Supporting breakdowns that are not part of the standard report."""
+        c, io = self.mimic_counts, self.io_counts
+        return [
+            ("Process mimics", c[PROCESS]),
+            ("Popup (On Top) mimics", c[POPUP]),
+            ("Overlay mimics", c[OVERLAY]),
+            ("Other mimics (not counted in the breakdown)", c[OTHER]),
+            ("Message I/O tags (not counted as analogue/digital)", io["MSG"]),
+            ("Tags with alarms", self.alarmed_tags),
+            ("PLC connections", ", ".join(self.plc_connections) or "None"),
         ]
 
     def history_model_lines(self) -> List[str]:
@@ -270,6 +275,8 @@ def engineering_summary(r: AnalysisResult, rules: Optional[Dict[str, object]] = 
     connections = {}
     for key in sorted(used_access):
         acc = r.access_names.get(key)
+        if acc is None and r.access_names:
+            continue  # undefined access name: reported under Issues, not a connection
         # Several access names can point at the same PLC (application|topic).
         conn = f"{acc.application}|{acc.topic}".lower() if acc else key
         connections.setdefault(conn, acc.name if acc else key)

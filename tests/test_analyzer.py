@@ -120,6 +120,9 @@ class AnalyzerTest(unittest.TestCase):
         self.assertIn(("Access name has no tags", "SPARE"), cats)
         self.assertIn(("Reference to undefined tag", "Missing_Tag"), cats)
         self.assertIn(("Window references no tags", "win00002"), cats)
+        from intouch_analyzer.classify import DEFAULT_RULES, engineering_summary
+        eng = engineering_summary(r, dict(DEFAULT_RULES), {})
+        self.assertEqual(eng.plc_connections, ["PLC1", "PLC2"])  # "NOPE" is undefined
 
     def test_tables_and_csv_export(self):
         tables = build_tables(self.res)

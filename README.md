@@ -10,15 +10,36 @@ application folder and reports on its **I/O tags**, **access names** and
 
 | Tab | What it shows |
 |-----|---------------|
-| **Summary** | Engineering summary first (same rows as the Excel **Summary** sheet): number of mimics and breakdown by type (Process / Popups: On Top + Overlay / Other), number of I/O data points, Analogues vs Digital, AI / AO / DI / DO / PULSE, configured alarms, historised points, historisation models (e.g. `Model 1-Flow-Change-2.5%-5`) and PLC connections. Detailed statistics follow. |
-| **Summary (details)** | Counts of tags by type, I/O tags, access names, windows, unused/alarmed tags, and a **historical logging breakdown**: how many tags are stored at each rate (e.g. `Cyclic 10 s`, `Cyclic 1 min`, `On change`, `On change (deadband 0.5)`), split into I/O and Memory. Double-click a rate to list its tags. |
+| **Summary** | The analysis report (below), then a **Details** section: Process / On Top / Overlay / Other mimic counts, message tags, tags with alarms, PLC connection names, and general statistics including the historical logging breakdown. |
 | **Tags / IO** | Every tag with type, access name, PLC item/address, group, comment, alarm flag, history rate and the windows using it. Filter by text, type (I/O, Memory, IODisc...), access name, history rate, used/unused. Double-click a tag for full details and all references. |
 | **Access Names** | Application/topic (DAServer/OI server), advise mode, protocol, failover partner, tag count. Double-click to list that access name's tags. |
 | **Mimics / Windows** | Every window with its mimic type (and where the type came from),  tag and I/O-tag counts and the access names (PLCs) it depends on. Select one to see its tags, their PLC addresses, windows it opens (`Show "..."`), remote references (`Access:Item`) and references to undefined tags. |
 | **Window-Tag Map** | Flat window → tag cross-reference (searchable) |
 | **Issues** | I/O tags with no/undefined access name, missing item names, duplicate PLC addresses, unused access names, references to undefined tags, windows with no tags, unused tags |
 
-Everything can be exported to **Excel** (one formatted sheet per table) or **CSV**.
+### Analysis report
+
+The report is the first sheet (**Summary**) of the Excel export, the top of the
+Summary tab, and what **Copy report** puts on the clipboard (tab-separated, so it
+pastes straight into Excel or a Word table):
+
+| | |
+|---|---:|
+| Number of mimics | 38 |
+| Mimic Breakdown by type (Process, Popups) | Process - 35 / Popups (On Top + Overlay) - 2 |
+| Number of data points (I/O tags) | 749 |
+| Breakdown by type (DI / DO / AI / AO) | Analogues - 300 / Digital - 449 |
+| &nbsp;&nbsp;&nbsp;of which (DI / DO / AI / AO) | AI 212 / AO 88 / DI 423 / DO 24 / PULSE 0 |
+| Number of configured alarms | 106 |
+| Number of historised points | 19 |
+| Historisation rate | Model 1-Flow-Change-2.5%-5<br>Model 2-Level-Change-5%-5<br>... |
+| Number of PLC connections | 1 |
+
+Mimics classed as *Other* (templates, old copies) count in *Number of mimics*
+but not in the Process/Popups breakdown. Message (IOMsg) tags count as data
+points but not as analogue/digital. The **Details** sheet has both counts.
+
+Everything else can be exported to **Excel** (one formatted sheet per table) or **CSV**.
 
 ## Requirements
 
@@ -45,7 +66,7 @@ Command line / headless use:
 ```bat
 python -m intouch_analyzer "C:\InTouch\MyApp"                          :: GUI, analyses immediately
 python -m intouch_analyzer "C:\InTouch\MyApp" --excel MyApp.xlsx       :: no GUI
-python -m intouch_analyzer "C:\InTouch\MyApp" --dbdump tags.csv --csv out_folder --summary
+python -m intouch_analyzer "C:\InTouch\MyApp" --summary --details              :: print the report
 python -m intouch_analyzer "C:\InTouch\MyApp" --history historian_tags.txt --excel MyApp.xlsx
 ```
 

@@ -6,7 +6,7 @@ from intouch_analyzer import classify
 from intouch_analyzer.analyzer import analyze
 from intouch_analyzer.classify import (DEFAULT_RULES, engineering_summary, load_overrides,
                                        load_rules, save_settings, validate_rules)
-from intouch_analyzer.export import build_tables, summary_rows
+from intouch_analyzer.export import build_tables, details_rows, report_tsv, summary_rows
 
 DBDUMP = """:IOAccess,Application,Topic
 "PLC1","DASABCIP","Line1"
@@ -82,32 +82,61 @@ class ClassifyTest(unittest.TestCase):
 
     def test_summary_rows(self):
         eng = engineering_summary(self.res, self.rules, {})
-        rows = dict(eng.rows(len(self.res.windows), len(self.res.io_tags)))
-        self.assertEqual(rows["Number of mimics"], "5")
-        self.assertEqual(rows["Mimic Breakdown by type (Process, Popups)"],
-                         "Process - 2 / Popups (On Top + Overlay) - 2 "
-                         "(On Top 1, Overlay 1) / Other - 1")
-        self.assertEqual(rows["Number of data points (I/O tags)"], "10")
-        self.assertEqual(rows["Breakdown by type (DI / DO / AI / AO)"],
-                         "Analogues - 5 / Digital - 5")
-        self.assertEqual(rows["   of which (DI / DO / AI / AO)"],
-                         "AI 3 / AO 2 / DI 2 / DO 2 / PULSE 1")
-        self.assertEqual(rows["Number of configured alarms"], "3 (on 2 tags)")
-        self.assertEqual(rows["Number of historised points"], "3")
-        self.assertEqual(rows["Historisation rate"],
-                         "Model 1-Flow-Change-2.5%-2\nModel 2-Level-Change-5%-1")
-        # PLC1 and PLC1_ALT share application|topic -> one connection; SPARE unused
-        self.assertEqual(rows["Number of PLC connections"], "1 (PLC1)")
+        self.assertEqual(eng.rows(len(self.res.windows), len(self.res.io_tags)), [
+            ("Number of mimics", 5),
+            ("Mimic Breakdown by type (Process, Popups)",
+             "Process - 2 / Popups (On Top + Overlay) - 2"),
+            ("Number of data points (I/O tags)", 10),
+            ("Breakdown by type (DI / DO / AI / AO)", "Analogues - 5 / Digital - 5"),
+            ("   of which (DI / DO / AI / AO)", "AI 3 / AO 2 / DI 2 / DO 2 / PULSE 1"),
+            ("Number of configured alarms", 3),
+            ("Number of historised points", 3),
+            ("Historisation rate", "Model 1-Flow-Change-2.5%-2\nModel 2-Level-Change-5%-1"),
+            # PLC1 and PLC1_ALT share application|topic -> one connection; SPARE unused
+            ("Number of PLC connections", 1),
+        ])
+        details = dict(eng.detail_rows())
+        self.assertEqual(details["Popup (On Top) mimics"], 1)
+        self.assertEqual(details["Overlay mimics"], 1)
+        self.assertEqual(details["Other mimics (not counted in the breakdown)"], 1)
+        self.assertEqual(details["Tags with alarms"], 2)
+        self.assertEqual(details["PLC connections"], "PLC1")
 
     def test_tables(self):
-        tables = build_tables(self.res, engineering_summary(self.res, self.rules, {}))
-        self.assertEqual(tables["Summary"][1][0], ("Number of mimics", "5"))
+        eng = engineering_summary(self.res, self.rules, {})
+        tables = build_tables(self.res, eng)
+        self.assertEqual(tables["Summary"], ([], summary_rows(self.res, eng)))
+        self.assertIn(("Tags with alarms", 2), tables["Details"][1])
+        self.assertIn(("Total tags", "11"), details_rows(self.res, eng))
         headers, rows = tables["History Models"]
         self.assertEqual(rows[0], ("Model 1", "Flow", "Change-2.5%", 2, "FT101; FT102"))
         headers, rows = tables["Windows"]
         main = next(r for r in rows if r[0] == "Main")
         self.assertEqual(main[headers.index("Mimic Type")], "Process")
-        self.assertIn("Detailed statistics", [r[0] for r in summary_rows(self.res)])
+
+    def test_report_tsv(self):
+        eng = engineering_summary(self.res, self.rules, {})
+        tsv = report_tsv(self.res, eng)
+        self.assertTrue(tsv.startswith("Number of mimics\t5\n"))
+        self.assertIn('Historisation rate\t"Model 1-Flow-Change-2.5%-2\n'
+                      'Model 2-Level-Change-5%-1"\n', tsv)
+
+    def test_excel_report_sheet(self):
+        try:
+            import openpyxl
+        except ImportError:
+            self.skipTest("openpyxl not installed")
+        from intouch_analyzer.export import export_excel
+        path = os.path.join(self.tmp.name, "r.xlsx")
+        export_excel(self.res, path, engineering_summary(self.res, self.rules, {}))
+        wb = openpyxl.load_workbook(path)
+        self.assertEqual(wb.sheetnames[:2], ["Summary", "Details"])
+        ws = wb["Summary"]
+        self.assertEqual(ws.max_row, 9)
+        self.assertEqual(ws["A1"].value, "Number of mimics")
+        self.assertEqual(ws["B1"].value, 5)  # a number, not text
+        self.assertTrue(ws["B8"].alignment.wrap_text)
+        self.assertEqual(ws["A1"].border.left.style, "thin")
 
 
 class SettingsTest(unittest.TestCase):

@@ -23,12 +23,29 @@ def default_engineering(r: AnalysisResult) -> EngineeringSummary:
 
 
 def summary_rows(r: AnalysisResult,
-                 eng: Optional[EngineeringSummary] = None) -> List[Tuple[str, str]]:
-    """Engineering summary (mimics, DI/DO/AI/AO, alarms, history, PLCs)
-    followed by detailed statistics. Values may contain newlines."""
+                 eng: Optional[EngineeringSummary] = None) -> List[Tuple[str, object]]:
+    """The analysis report rows (mimics, I/O, alarms, history, PLCs).
+    Counts are ints; the historisation rate may contain newlines."""
     eng = eng or default_engineering(r)
-    return (eng.rows(len(r.windows), len(r.io_tags))
-            + [("", ""), ("Detailed statistics", "")] + detail_rows(r))
+    return eng.rows(len(r.windows), len(r.io_tags))
+
+
+def details_rows(r: AnalysisResult,
+                 eng: Optional[EngineeringSummary] = None) -> List[Tuple[str, object]]:
+    """Supporting breakdowns and statistics behind the report."""
+    eng = eng or default_engineering(r)
+    return eng.detail_rows() + detail_rows(r)
+
+
+def report_tsv(r: AnalysisResult, eng: Optional[EngineeringSummary] = None) -> str:
+    """The report as tab-separated text (pastes straight into Excel)."""
+    lines = []
+    for item, value in summary_rows(r, eng):
+        value = str(value)
+        if "\n" in value or '"' in value:
+            value = '"' + value.replace('"', '""') + '"'
+        lines.append(f"{item}\t{value}")
+    return "\n".join(lines) + "\n"
 
 
 def detail_rows(r: AnalysisResult) -> List[Tuple[str, str]]:
@@ -75,7 +92,8 @@ def build_tables(r: AnalysisResult,
     per_access = r.tags_per_access_name()
     tables: Dict[str, Table] = {}
 
-    tables["Summary"] = (["Item", "Value"], summary_rows(r, eng))
+    tables["Summary"] = ([], summary_rows(r, eng))  # no header row: report format
+    tables["Details"] = (["Item", "Value"], details_rows(r, eng))
 
     tag_rows = []
     for t in sorted(r.tags.values(), key=lambda t: t.key):
@@ -153,7 +171,7 @@ def export_excel(r: AnalysisResult, path: str,
                  eng: Optional[EngineeringSummary] = None) -> None:
     try:
         from openpyxl import Workbook
-        from openpyxl.styles import Alignment, Font, PatternFill
+        from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
         from openpyxl.utils import get_column_letter
     except ImportError as exc:  # pragma: no cover - depends on environment
         raise RuntimeError("Excel export needs openpyxl: pip install openpyxl") from exc
@@ -164,6 +182,9 @@ def export_excel(r: AnalysisResult, path: str,
     header_fill = PatternFill("solid", fgColor="305496")
     wrap = Alignment(wrap_text=True, vertical="top")
     for name, (headers, rows) in build_tables(r, eng).items():
+        if not headers:
+            _report_sheet(wb.create_sheet(name[:31]), rows, Alignment, Border, Side)
+            continue
         ws = wb.create_sheet(name[:31])
         ws.append(headers)
         for cell in ws[1]:
@@ -184,6 +205,24 @@ def export_excel(r: AnalysisResult, path: str,
     wb.save(path)
 
 
+def _report_sheet(ws, rows, Alignment, Border, Side) -> None:
+    """Two-column bordered report table, counts right-aligned as numbers."""
+    thin = Side(style="thin", color="000000")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    for item, value in rows:
+        ws.append([item, value])
+        for cell in ws[ws.max_row]:
+            cell.border = border
+            if isinstance(cell.value, str) and "\n" in cell.value:
+                cell.alignment = Alignment(wrap_text=True)
+        lines = str(value).count("\n") + 1
+        if lines > 1:
+            ws.row_dimensions[ws.max_row].height = 15 * lines
+    ws.column_dimensions["A"].width = max(len(str(i)) for i, _ in rows) + 2
+    ws.column_dimensions["B"].width = max(len(line) for _, v in rows
+                                          for line in str(v).splitlines() or [""]) + 2
+
+
 def export_csv(r: AnalysisResult, folder: str,
                eng: Optional[EngineeringSummary] = None) -> List[str]:
     os.makedirs(folder, exist_ok=True)
@@ -192,7 +231,8 @@ def export_csv(r: AnalysisResult, folder: str,
         path = os.path.join(folder, name.replace(" ", "_").lower() + ".csv")
         with open(path, "w", newline="", encoding="utf-8-sig") as fh:
             w = csv.writer(fh)
-            w.writerow(headers)
+            if headers:
+                w.writerow(headers)
             w.writerows(rows)
         written.append(path)
     return written

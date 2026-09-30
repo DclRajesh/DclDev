@@ -14,7 +14,8 @@ from . import __version__
 from .analyzer import analyze
 from .classify import (DEFAULT_RULES, MIMIC_TYPES, engineering_summary, load_overrides,
                        load_rules, override_key, save_settings, validate_rules)
-from .export import build_tables, export_csv, export_excel, history_rows, summary_rows
+from .export import (build_tables, details_rows, export_csv, export_excel, history_rows,
+                     report_tsv, summary_rows)
 from .models import AnalysisResult
 
 ALL = "(All)"
@@ -160,6 +161,9 @@ class App(tk.Tk):
         self.csv_btn = ttk.Button(exp, text="Export CSV...", command=self._export_csv,
                                   state="disabled")
         self.csv_btn.pack(fill="x", pady=(4, 0))
+        self.copy_btn = ttk.Button(exp, text="Copy report", command=self._copy_report,
+                                   state="disabled")
+        self.copy_btn.pack(fill="x", pady=(4, 0))
         bar.columnconfigure(1, weight=1)
 
     def _build_statusbar(self):
@@ -387,6 +391,7 @@ class App(tk.Tk):
         self.analyse_btn.configure(state="normal")
         self.excel_btn.configure(state="normal")
         self.csv_btn.configure(state="normal")
+        self.copy_btn.configure(state="normal")
         self.overrides = load_overrides(res.app_path)
         self.tag_search.set("")
         self.tag_cat.set(ALL)
@@ -409,10 +414,12 @@ class App(tk.Tk):
         self._tables = build_tables(res, self.eng)
 
         summary = []
-        for item, value in summary_rows(res, self.eng):
-            lines = str(value).split("\n")
-            summary.append((item, lines[0]))
-            summary.extend(("", line) for line in lines[1:])
+        for rows in (summary_rows(res, self.eng),
+                     [("", ""), ("Details", "")] + details_rows(res, self.eng)):
+            for item, value in rows:
+                lines = str(value).split("\n")
+                summary.append((item, lines[0]))
+                summary.extend(("", line) for line in lines[1:])
         self.summary.set_rows(summary + [("Warning", w) for w in res.warnings])
         hist = history_rows(res)
         self.history_table.set_rows(hist)
@@ -599,6 +606,13 @@ class App(tk.Tk):
             return
         self.status_var.set(f"Exported {path}")
         messagebox.showinfo("Export", f"Report saved to:\n{path}")
+
+    def _copy_report(self):
+        if not self.result:
+            return
+        self.clipboard_clear()
+        self.clipboard_append(report_tsv(self.result, self.eng))
+        self.status_var.set("Report copied to the clipboard - paste it into Excel or Word.")
 
     def _export_csv(self):
         if not self.result:
