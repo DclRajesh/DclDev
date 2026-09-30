@@ -62,6 +62,14 @@ def load_rules(path: str = SETTINGS_FILE) -> Dict[str, object]:
     return rules
 
 
+def load_folders(path: str = SETTINGS_FILE) -> Dict[str, str]:
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return dict(json.load(fh).get("folders", {}))
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
 def load_overrides(app_path: str, path: str = SETTINGS_FILE) -> Dict[str, str]:
     try:
         with open(path, "r", encoding="utf-8") as fh:
@@ -73,7 +81,8 @@ def load_overrides(app_path: str, path: str = SETTINGS_FILE) -> Dict[str, str]:
 
 def save_settings(rules: Optional[Dict[str, object]] = None, app_path: str = "",
                   overrides: Optional[Dict[str, str]] = None,
-                  path: str = SETTINGS_FILE) -> None:
+                  path: str = SETTINGS_FILE,
+                  folders: Optional[Dict[str, str]] = None) -> None:
     try:
         with open(path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
@@ -83,6 +92,8 @@ def save_settings(rules: Optional[Dict[str, object]] = None, app_path: str = "",
         data["rules"] = {k: v for k, v in rules.items() if DEFAULT_RULES.get(k) != v}
     if app_path and overrides is not None:
         data.setdefault("mimic_overrides", {})[os.path.abspath(app_path)] = overrides
+    if folders is not None:
+        data.setdefault("folders", {}).update(folders)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(data, fh, indent=2)

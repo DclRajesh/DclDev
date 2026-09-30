@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import queue
+import subprocess
+import sys
 import threading
 import traceback
 import tkinter as tk
@@ -16,6 +18,8 @@ from .classify import (DEFAULT_RULES, MIMIC_TYPES, engineering_summary, load_ove
                        load_rules, override_key, save_settings, validate_rules)
 from .export import (build_tables, details_rows, export_csv, export_excel, history_rows,
                      report_tsv, summary_rows)
+from .sites import (app_label, copy_app, default_sites_root, default_work_root, find_sites,
+                    list_sites, locate_site_apps, report_path)
 from .models import AnalysisResult
 
 ALL = "(All)"
@@ -124,11 +128,38 @@ class App(tk.Tk):
         self.other_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="Select an InTouch application folder and click Analyse.")
 
+        self.sites_root = default_sites_root()
+        self.work_root = default_work_root()
+        self.site_var = tk.StringVar()
+        self._report = None  # (report file, message) after a site survey
+
+        self._build_sitebar()
         self._build_toolbar()
         self._build_notebook()
         self._build_statusbar()
 
     # ---------------------------------------------------------------- layout
+    def _build_sitebar(self):
+        box = ttk.LabelFrame(self, text="Site survey", padding=(8, 4))
+        box.pack(fill="x", padx=8, pady=(8, 0))
+        ttk.Label(box, text="Site:").pack(side="left")
+        self.site_cb = ttk.Combobox(box, textvariable=self.site_var, width=40)
+        self.site_cb.pack(side="left", padx=4)
+        self.site_cb.bind("<Return>", lambda _e: self._start_site_survey())
+        self.site_btn = ttk.Button(box, text="Survey report", command=self._start_site_survey)
+        self.site_btn.pack(side="left", padx=4)
+        ttk.Button(box, text="Folders...", command=self._edit_folders).pack(side="left")
+        self.sites_label = ttk.Label(box, foreground="gray")
+        self.sites_label.pack(side="left", padx=8)
+        self._load_sites()
+
+    def _load_sites(self):
+        sites = list_sites(self.sites_root)
+        self.site_cb.configure(values=sites)
+        where = f"{len(sites)} sites in {self.sites_root}" if sites else \
+            f"Sites folder not found: {self.sites_root} (use Folders...)"
+        self.sites_label.configure(text=where + f"  |  copies to {self.work_root}")
+
     def _build_toolbar(self):
         bar = ttk.Frame(self, padding=(8, 8, 8, 4))
         bar.pack(fill="x")
@@ -377,8 +408,12 @@ class App(tk.Tk):
                 elif msg[0] == "done":
                     self._on_done(msg[1])
                     return
+                elif msg[0] == "call":
+                    msg[1](msg[2])
+                    return
                 elif msg[0] == "error":
                     self.analyse_btn.configure(state="normal")
+                    self.site_btn.configure(state="normal")
                     self.status_var.set("Analysis failed.")
                     messagebox.showerror("Analysis failed", f"{msg[1]}\n\n{msg[2]}")
                     return
@@ -389,6 +424,7 @@ class App(tk.Tk):
     def _on_done(self, res: AnalysisResult):
         self.result = res
         self.analyse_btn.configure(state="normal")
+        self.site_btn.configure(state="normal")
         self.excel_btn.configure(state="normal")
         self.csv_btn.configure(state="normal")
         self.copy_btn.configure(state="normal")
@@ -404,6 +440,11 @@ class App(tk.Tk):
             f"Analysed {os.path.basename(res.app_path)}: {len(res.tags)} tags, "
             f"{len(res.io_tags)} I/O, {len(res.access_names)} access names, "
             f"{len(res.windows)} windows.")
+        if self._report:
+            (out, note), self._report = self._report, None
+            self.status_var.set(f"Survey report saved: {out}")
+            if messagebox.askyesno("Survey report", note + "\n\nOpen the folder?"):
+                _open_folder(os.path.dirname(out))
 
     def _refresh(self):
         """(Re)build all views from the result, rules and mimic overrides."""
@@ -487,6 +528,93 @@ class App(tk.Tk):
         self.tag_hist.set(ALL)
         self.tag_access.set(row[0])
         self.notebook.select(1)
+
+    # --------------------------------------------------------- site survey
+    def _run(self, work, then):
+        """Run work() in a thread and then(result) in the GUI thread."""
+        def worker():
+            try:
+                self._queue.put(("call", then, work()))
+            except Exception as exc:  # noqa: BLE001 - report any failure to the user
+                self._queue.put(("error", exc, traceback.format_exc()))
+        threading.Thread(target=worker, daemon=True).start()
+        self.after(100, self._poll)
+
+    def _say(self, text):
+        self._queue.put(("progress", 0, 1, text))
+
+    def _start_site_survey(self):
+        request = self.site_var.get().strip()
+        if not request:
+            messagebox.showinfo("Survey report", "Type or pick a site, e.g. Baunton.")
+            return
+        matches = find_sites(self.sites_root, request)
+        if not matches:
+            messagebox.showerror("Survey report",
+                                 f"No site matching '{request}' in:\n{self.sites_root}")
+            return
+        site = matches[0]
+        if len(matches) > 1:
+            i = choose(self, "Survey report", f"Several sites match '{request}':", matches)
+            if i is None:
+                return
+            site = matches[i]
+        self.site_var.set(site)
+        self.site_btn.configure(state="disabled")
+        self.analyse_btn.configure(state="disabled")
+        self._run(lambda: locate_site_apps(self.sites_root, site, self.work_root,
+                                           progress=self._say),
+                  self._site_apps_found)
+
+    def _site_apps_found(self, found):
+        app = found.apps[0]
+        if len(found.apps) > 1:
+            labels = [app_label(a, found.site_path) for a in found.apps]
+            i = choose(self, "Survey report",
+                       f"{found.site} has several InTouch applications. Which one?", labels)
+            if i is None:
+                self.site_btn.configure(state="normal")
+                self.analyse_btn.configure(state="normal")
+                self.status_var.set("Survey cancelled.")
+                return
+            app = found.apps[i]
+
+        def work():
+            local = copy_app(found, app, progress=self._say)
+            self._say(f"Analysing {local}...")
+            res = analyze(local, include_other_files=self.other_var.get(),
+                          progress=lambda i, n, m: self._queue.put(("progress", i, n, m)))
+            out = report_path(found)
+            self._say("Writing report...")
+            try:
+                export_excel(res, out)
+            except RuntimeError:  # openpyxl missing -> CSV
+                out = os.path.splitext(out)[0]
+                export_csv(res, out)
+                out = os.path.join(out, "summary.csv")
+            notes = "\n".join(found.notes)
+            self._report = (out, f"{found.site} survey report saved:\n{out}\n\n"
+                                 f"Application copied from:\n{app}\nto:\n{local}"
+                                 + (f"\n\n{notes}" if notes else ""))
+            return res, local
+
+        def then(result):
+            res, local = result
+            self.app_var.set(local)
+            self.dbdump_var.set("")
+            self._on_done(res)
+        self._run(work, then)
+
+    def _edit_folders(self):
+        FoldersDialog(self, self.sites_root, self.work_root, self._folders_saved)
+
+    def _folders_saved(self, sites_root, work_root):
+        self.sites_root, self.work_root = sites_root, work_root
+        try:
+            save_settings(folders={"sites_root": sites_root, "work_root": work_root})
+        except OSError as exc:
+            messagebox.showwarning("Folders", f"Could not save the folders:\n{exc}")
+        self._load_sites()
 
     # ------------------------------------------------------ classification
     def _apply_mimic_type(self):
@@ -628,6 +756,91 @@ class App(tk.Tk):
             return
         self.status_var.set(f"Exported {len(files)} CSV files to {folder}")
         messagebox.showinfo("Export", f"{len(files)} CSV files saved to:\n{folder}")
+
+
+def _open_folder(path: str) -> None:
+    try:
+        if sys.platform == "win32":
+            os.startfile(path)  # noqa: S606 - opens Explorer on the report folder
+        else:
+            subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", path])
+    except OSError:
+        pass
+
+
+def choose(parent, title: str, prompt: str, options: Sequence[str]) -> Optional[int]:
+    """Modal list chooser; returns the chosen index or None."""
+    top = tk.Toplevel(parent)
+    top.title(title)
+    top.transient(parent)
+    top.grab_set()
+    ttk.Label(top, text=prompt, padding=8).pack(anchor="w")
+    lb = tk.Listbox(top, height=min(12, len(options)), width=70, exportselection=False)
+    for o in options:
+        lb.insert("end", o)
+    lb.selection_set(0)
+    lb.pack(fill="both", expand=True, padx=8)
+    result = {"i": None}
+
+    def ok(_e=None):
+        sel = lb.curselection()
+        result["i"] = sel[0] if sel else None
+        top.destroy()
+    lb.bind("<Double-1>", ok)
+    lb.bind("<Return>", ok)
+    btns = ttk.Frame(top, padding=8)
+    btns.pack(fill="x")
+    ttk.Button(btns, text="Cancel", command=top.destroy).pack(side="right")
+    ttk.Button(btns, text="OK", command=ok).pack(side="right", padx=6)
+    lb.focus_set()
+    parent.wait_window(top)
+    return result["i"]
+
+
+class FoldersDialog(tk.Toplevel):
+    """Where site folders are, and where applications are copied to."""
+
+    def __init__(self, master, sites_root, work_root, on_save):
+        super().__init__(master)
+        self.title("Site survey folders")
+        self.transient(master)
+        self.on_save = on_save
+        body = ttk.Frame(self, padding=10)
+        body.pack(fill="both", expand=True)
+        self.sites = tk.StringVar(value=sites_root)
+        self.work = tk.StringVar(value=work_root)
+        for row, (label, var) in enumerate((
+                ("Sites folder (HMI Site Survey \\ 04 Sites):", self.sites),
+                ("InTouch working folder (applications are copied here):", self.work))):
+            ttk.Label(body, text=label).grid(row=row * 2, column=0, columnspan=2, sticky="w",
+                                             pady=(6, 0))
+            ttk.Entry(body, textvariable=var, width=80).grid(row=row * 2 + 1, column=0,
+                                                              sticky="ew")
+            ttk.Button(body, text="Browse...",
+                       command=lambda v=var: self._browse(v)).grid(row=row * 2 + 1, column=1,
+                                                                   padx=4)
+        btns = ttk.Frame(body)
+        btns.grid(row=4, column=0, columnspan=2, sticky="e", pady=(10, 0))
+        ttk.Button(btns, text="Save", command=self._save).pack(side="left", padx=6)
+        ttk.Button(btns, text="Cancel", command=self.destroy).pack(side="left")
+        body.columnconfigure(0, weight=1)
+
+    def _browse(self, var):
+        path = filedialog.askdirectory(parent=self, initialdir=var.get() or None)
+        if path:
+            var.set(os.path.normpath(path))
+
+    def _save(self):
+        sites, work = self.sites.get().strip(), self.work.get().strip()
+        if not os.path.isdir(sites):
+            if not messagebox.askyesno("Folders", f"Sites folder not found:\n{sites}\n\n"
+                                       "Save anyway?", parent=self):
+                return
+        if not work:
+            messagebox.showerror("Folders", "Choose an InTouch working folder.", parent=self)
+            return
+        self.destroy()
+        self.on_save(sites, work)
 
 
 class RulesDialog(tk.Toplevel):

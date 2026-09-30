@@ -6,6 +6,38 @@ application folder and reports on its **I/O tags**, **access names** and
 
 ![Summary tab](docs/screenshot_summary.png)
 
+## Site survey reports
+
+To report on a surveyed site, type or pick the site name in the **Site survey**
+bar (e.g. `Baunton`, or `Baunton survey report`) and click **Survey report**.
+The app:
+
+1. finds the site folder under the HMI Site Survey **04 Sites** folder
+   (`C:\Users\<you>\Donavalli consulting Limited(1)\System Platform - Documents\HMI Site Survey\04 Sites`);
+2. searches it (all sub-folders) for the InTouch application, i.e. a folder with
+   `tagname.x` or `*.win` files. If there isn't one, it extracts zip backups
+   and searches those. If a site has several applications you pick one (the
+   one with the most windows is listed first);
+3. copies the application to the local InTouch working folder
+   (`C:\InTouch\<site>\<application>`), together with any DBDump CSV found
+   elsewhere in the site folder. Nothing in the site folder is changed;
+4. analyses the copy and saves **`<site> HMI Survey Report.xlsx`** in
+   `C:\InTouch\<site>`, then offers to open that folder.
+
+Change the two folders with **Folders...** (saved per user). Running a survey
+again replaces the previous copy. The app only ever deletes folders it created
+itself, and stops if the target folder already exists and wasn't made by it.
+
+From the command line:
+
+```bat
+python -m intouch_analyzer --site "Baunton survey report"
+python -m intouch_analyzer --site Baunton --app 2 --work-dir D:\InTouch     :: 2nd application found
+```
+
+Files On-Demand: if the site folder is synced with OneDrive, copying downloads
+the files, so the first survey of a site can take a little longer.
+
 ## Features
 
 | Tab | What it shows |
@@ -160,6 +192,7 @@ intouch_analyzer/
   dbdump.py     DBDump CSV parser + tagname.x fallback
   history.py    historical logging mode / storage rate (DBDump + Historian export)
   classify.py   engineering summary: mimic types, DI/DO/AI/AO, alarms, history models
+  sites.py      site survey: find the site's InTouch application, copy it locally
   binscan.py    string extraction and tag-reference matching
   models.py     Tag / AccessName / Source / AnalysisResult + issue checks
   export.py     report tables, Excel and CSV export
