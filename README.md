@@ -202,3 +202,8 @@ tests/          unit tests using a synthetic InTouch application
 ```
 
 Run the tests with `python -m unittest discover -s tests`.
+
+## Other tools in this repository
+
+- [`aveva-sp-mcp/`](aveva-sp-mcp/README.md): an MCP server for AVEVA System Platform, so an AI
+  assistant (Claude Code) can read, edit, deploy and test a Galaxy. Self-contained C#/.NET project.

@@ -1,0 +1,66 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    net48 (x86) is the real target: GRAccess and MXAccess are 32-bit .NET Framework COM interop
+    assemblies that only exist on a machine with AVEVA System Platform installed.
+    net8.0 builds everywhere and only contains the mock backend (for trying the tools and for tests).
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFrameworks>net48;net8.0</TargetFrameworks>
+    <LangVersion>12.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <RootNamespace>AvevaSpMcp</RootNamespace>
+    <AssemblyName>aveva-sp-mcp</AssemblyName>
+    <RollForward>Major</RollForward>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net48'">
+    <PlatformTarget>x86</PlatformTarget>
+    <Prefer32Bit>true</Prefer32Bit>
+  </PropertyGroup>
+
+  <!-- Override on the command line if your install differs:  -p:GRAccessDll="D:\...\ArchestrA.GRAccess.dll" -->
+  <PropertyGroup>
+    <GRAccessDll Condition="'$(GRAccessDll)' == ''">C:\Program Files (x86)\Common Files\ArchestrA\ArchestrA.GRAccess.dll</GRAccessDll>
+    <MxAccessDll Condition="'$(MxAccessDll)' == ''">C:\Program Files (x86)\ArchestrA\Framework\Bin\ArchestrA.MxAccess.dll</MxAccessDll>
+    <HasGRAccess Condition="'$(TargetFramework)' == 'net48' And Exists('$(GRAccessDll)')">true</HasGRAccess>
+    <HasMxAccess Condition="'$(TargetFramework)' == 'net48' And Exists('$(MxAccessDll)')">true</HasMxAccess>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(HasGRAccess)' == 'true'">
+    <DefineConstants>$(DefineConstants);GRACCESS</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(HasMxAccess)' == 'true'">
+    <DefineConstants>$(DefineConstants);MXACCESS</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(HasGRAccess)' == 'true'">
+    <Reference Include="ArchestrA.GRAccess">
+      <HintPath>$(GRAccessDll)</HintPath>
+      <EmbedInteropTypes>false</EmbedInteropTypes>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+  <ItemGroup Condition="'$(HasMxAccess)' == 'true'">
+    <Reference Include="ArchestrA.MxAccess">
+      <HintPath>$(MxAccessDll)</HintPath>
+      <EmbedInteropTypes>false</EmbedInteropTypes>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ModelContextProtocol" Version="2.4.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.14" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+  <Target Name="ReportAvevaBackends" AfterTargets="Build" Condition="'$(TargetFramework)' == 'net48'">
+    <Message Importance="high" Text="aveva-sp-mcp: GRAccess backend compiled in = '$(HasGRAccess)' ($(GRAccessDll))" />
+    <Message Importance="high" Text="aveva-sp-mcp: MXAccess backend compiled in = '$(HasMxAccess)' ($(MxAccessDll))" />
+  </Target>
+
+</Project>

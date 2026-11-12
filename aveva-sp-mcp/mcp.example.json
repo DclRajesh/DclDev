@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "aveva-sp": {
+      "command": "C:\\path\\to\\aveva-sp-mcp\\src\\AvevaSpMcp\\bin\\Release\\net48\\aveva-sp-mcp.exe",
+      "env": {
+        "AVEVA_SP_GALAXY": "MyDevGalaxy",
+        "AVEVA_SP_ALLOW": "configure,deploy,import"
+      }
+    }
+  }
+}
